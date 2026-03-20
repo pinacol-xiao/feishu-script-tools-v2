@@ -170,7 +170,7 @@ if st.button("**🚀 第三步：开始拼接并上传飞书**", use_container_w
             "质检说明：", "检查结论：", "修改后的完整分集细纲：" 
         ]
         
-        resume_keywords = ["核心事件ID", "Theme", "情绪:", "情绪：", "适用冲突", "主角:", "主角：", "对手:", "对手：", "Act ", "姓名", "分场信息", "Shooting script", "Shooting Script", "人物关系图谱", "角色关系图"]
+        resume_keywords = ["核心事件ID", "Theme", "情绪:", "情绪：", "适用冲突", "主角:", "主角：", "对手:", "对手：", "角色:", "角色：", "角色小传", "Act ", "姓名", "分场信息", "Shooting script", "Shooting Script", "人物关系图谱", "角色关系图", "[分集细纲]"]
 
         with st.spinner('正在进行数据清洗与双文档拼接...'):
             for file in sorted_files:
@@ -209,7 +209,7 @@ if st.button("**🚀 第三步：开始拼接并上传飞书**", use_container_w
                     if any(clean_str.startswith(kw) for kw in skip_keywords):
                         skip_mode = True
                         continue
-                    if re.match(r'^第\d+集([：:]|\s*\[)\s*(将|在|字数|添加)', clean_str):
+                    if re.match(r'^(?:\[.*?\]\s*)?第\d+集([：:]|\s*\[)\s*(将|在|字数|添加)', clean_str):
                         skip_mode = True
                         continue
                     if skip_mode and re.match(r'^第\d+集\s*\|', clean_str):
@@ -221,7 +221,7 @@ if st.button("**🚀 第三步：开始拼接并上传飞书**", use_container_w
                     is_resume = False
                     if any(clean_str.startswith(kw) for kw in resume_keywords): is_resume = True
                     if clean_str.startswith("集数 |") or clean_str.startswith("Episode |") or clean_str.startswith("编号/ID |"): is_resume = True
-                    if re.match(r'^第\d+集([：:]|\s*\[)', clean_str) and not re.match(r'^第\d+集([：:]|\s*\[)\s*(将|在|字数|添加)', clean_str): is_resume = True
+                    if re.match(r'^(?:\[.*?\]\s*)?第\d+集', clean_str) and not re.match(r'^(?:\[.*?\]\s*)?第\d+集([：:]|\s*\[)\s*(将|在|字数|添加)', clean_str): is_resume = True
                     if re.match(r'^1\.\s+[A-Za-z\u4e00-\u9fa5]', clean_str): is_resume = True
 
                     if is_resume: skip_mode = False
