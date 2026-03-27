@@ -198,6 +198,9 @@ if st.button("**🚀 第三步：开始拼接并上传飞书**", use_container_w
         
         resume_keywords = ["核心事件ID", "Theme", "情绪:", "情绪：", "适用冲突", "主角:", "主角：", "对手:", "对手：", "角色:", "角色：", "角色小传", "Act ", "姓名", "分场信息", "Shooting script", "Shooting Script", "人物关系图谱", "角色关系图", "[分集细纲]"]
 
+        # 👇 新增变量：智能序列截断阀门
+        shooting_script_cutoff_reached = False
+
         with st.spinner('正在进行数据清洗与双文档拼接...'):
             for file in sorted_files:
                 base_name = file.name.replace('\\', '/').split('/')[-1]
@@ -208,7 +211,23 @@ if st.button("**🚀 第三步：开始拼接并上传飞书**", use_container_w
                 if "idea" in base_name.lower() or "创意" in base_name:
                     continue
                 
-                raw_lines = file.getvalue().decode("utf-8").splitlines()
+                raw_text = file.getvalue().decode("utf-8")
+                
+                # 👇 变更点：判断是否为 Shooting Script 及触发截断逻辑
+                is_shooting_script = re.search(r'EP\d+', base_name, re.IGNORECASE) or "shootingscript" in base_name.lower()
+                
+                if is_shooting_script:
+                    # 如果前面的集数已经触发了截断，后续的所有集数无论长短全部丢弃
+                    if shooting_script_cutoff_reached:
+                        continue 
+                    
+                    # 判断当前集的总字符数。如果小于 100 字，说明断更了，立刻关死阀门
+                    if len(raw_text.strip()) < 100:
+                        shooting_script_cutoff_reached = True
+                        continue
+                
+                # 开始逐行解析
+                raw_lines = raw_text.splitlines()
                 
                 if "主题" in base_name: merged_text += "# 2. 主题\n\n"
                 elif "主角小传" in base_name: merged_text += "# 3. 主角小传\n\n"
@@ -218,7 +237,7 @@ if st.button("**🚀 第三步：开始拼接并上传飞书**", use_container_w
                 elif "核心剧情事件" in base_name: merged_text += "# 6. 核心剧情事件\n\n"
                 elif "细纲" in base_name: merged_text += "# 7. 单集细纲\n\n"
                 elif "角色提示词" in base_name: merged_text += "# 8. 角色提示词\n\n"
-                elif re.search(r'EP\d+', base_name, re.IGNORECASE) or "shootingscript" in base_name.lower():
+                elif is_shooting_script:
                     if not state_shooting_printed:
                         merged_text += "# 9. Shooting script\n\n"
                         state_shooting_printed = True
@@ -283,18 +302,15 @@ if st.button("**🚀 第三步：开始拼接并上传飞书**", use_container_w
                             is_redundant_title = True
                             
                     if not is_redundant_title:
-                        # 👇 标题降维机制：遇到自带的 Markdown 标题，直接转换为加粗文本
+                        # 标题降维机制：遇到自带的 Markdown 标题，直接转换为加粗文本
                         heading_match = re.match(r'^#+\s+(.*)', raw_str)
                         if heading_match:
                             inner_text = heading_match.group(1).strip()
-                            # 唯独保留三幕大纲中的 Act 1 等层级，因为它极具结构性
                             if "三幕大纲" in base_name and re.match(r'^Act\s*\d+', inner_text, re.IGNORECASE):
                                 line = f"#### {inner_text}"
                             else:
-                                # 其他全部降维，剥离目录污染
                                 inner_text = inner_text.replace('**', '')
                                 line = f"**{inner_text}**"
-                        # 防止三幕大纲的 Act 没加 #
                         elif "三幕大纲" in base_name and re.match(r'^Act\s*\d+', raw_str, re.IGNORECASE):
                             line = f"#### {raw_str}"
 
@@ -307,7 +323,7 @@ if st.button("**🚀 第三步：开始拼接并上传飞书**", use_container_w
                     extracted_sanmu += cleaned_file_text + "\n\n"
                 elif "细纲" in base_name:
                     extracted_xigang += cleaned_file_text + "\n\n"
-                elif re.search(r'EP\d+', base_name, re.IGNORECASE) or "shootingscript" in base_name.lower():
+                elif is_shooting_script:
                     match = re.search(r'EP(\d+)|第(\d+)集', base_name, re.IGNORECASE)
                     ep_num = (match.group(1) or match.group(2)) if match else "X"
                     extracted_shooting += f"#### EP{ep_num}\n\n{cleaned_file_text}\n\n"
