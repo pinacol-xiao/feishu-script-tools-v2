@@ -59,15 +59,19 @@ class FeishuDriveUploader:
         requests.post(url, headers=headers, json=payload)
 
 def get_sort_weight(filename):
-    if "主题" in filename: return 1
-    if "主角小传" in filename: return 2
-    if "反派小传" in filename or "对手" in filename: return 3
-    if "配角小传" in filename: return 4
-    if "三幕大纲" in filename or "核心剧情事件" in filename: return 5
-    if "细纲" in filename: return 6
-    if "shootingscript" in filename.lower():
-        match = re.search(r'第(\d+)集', filename)
-        ep = int(match.group(1)) if match else 99
+    # 提取最底层的文件名，防止被长长的文件夹路径干扰
+    base_name = filename.replace('\\', '/').split('/')[-1]
+    
+    if "主题" in base_name: return 1
+    if "主角小传" in base_name: return 2
+    if "反派小传" in base_name or "对手" in base_name: return 3
+    if "配角小传" in base_name: return 4
+    if "三幕大纲" in base_name or "核心剧情事件" in base_name: return 5
+    if "细纲" in base_name: return 6
+    if "角色提示词" in base_name: return 7
+    if re.search(r'EP\d+', base_name, re.IGNORECASE) or "shootingscript" in base_name.lower():
+        match = re.search(r'EP(\d+)|第(\d+)集', base_name, re.IGNORECASE)
+        ep = int(match.group(1) or match.group(2)) if match else 99
         return 100 + ep 
     return 999
 
@@ -79,15 +83,14 @@ st.caption("创作者：@pinacol_xiao")
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 
-# 👇 变更点：把第一步的标题独立出来，和第二步保持格式绝对统一
-st.markdown("**第一步：上传所有 TXT 剧本文件**")
+st.markdown("**第一步：上传整个剧本文件夹 (如 Bitten But Blessed)**")
 
 uploaded_files = st.file_uploader(
-    "上传文件", # 这个辅助标签虽然存在，但会被下一行代码隐藏
-    accept_multiple_files=True, 
+    "上传文件夹", 
+    accept_multiple_files="directory", 
     type=['txt'], 
     key=f"uploader_{st.session_state.uploader_key}",
-    label_visibility="collapsed" # 核心魔法：隐藏原生标签
+    label_visibility="collapsed" 
 )
 
 if uploaded_files:
@@ -99,15 +102,19 @@ default_script_name = ""
 default_date = time.strftime("%y%m%d") 
 
 if uploaded_files:
-    first_file_name = uploaded_files[0].name
-    clean_name = re.sub(r'[【】\[\]]', '', first_file_name)
-    match = re.search(r'^(.*?)_(\d{4,6})_', clean_name)
-    
-    if match:
-        default_script_name = match.group(1).strip() 
-        default_date = match.group(2) 
+    # 抓取根目录文件夹名称作为剧本标题
+    first_file_path = uploaded_files[0].name
+    path_parts = first_file_path.replace('\\', '/').split('/')
+    if len(path_parts) > 1:
+        default_script_name = path_parts[0].strip() 
     else:
-        default_script_name = clean_name.split('_')[0].replace(".txt", "").strip()
+        # 兼容旧的文件直传逻辑
+        clean_name = re.sub(r'[【】\[\]]', '', path_parts[-1])
+        match = re.search(r'^(.*?)_(\d{4,6})_', clean_name)
+        if match:
+            default_script_name = match.group(1).strip() 
+        else:
+            default_script_name = clean_name.split('_')[0].replace(".txt", "").strip()
 
 saved_name = st.query_params.get("name", "")
 
@@ -120,8 +127,7 @@ def format_email_callback():
         st.session_state.email_input = val + "@bytedance.com"
     st.query_params["email"] = st.session_state.email_input
 
-# 这里的标题现在和上面的第一步完全对称了！
-st.markdown("**第二步：确认信息** (剧名与日期已自动提取)")
+st.markdown("**第二步：确认信息** (剧名已自动从文件夹提取)")
 st.info("💡 **提示：** 输入名字和邮箱后，将本页面网址加入书签，即可记忆个人专属信息")
 
 with st.container():
@@ -148,14 +154,34 @@ download_container = st.empty()
 
 if st.button("**🚀 第三步：开始拼接并上传飞书**", use_container_width=True, type="primary"):
     if not uploaded_files:
-        st.warning("请先上传 TXT 文件！")
+        st.warning("请先上传文件夹！")
     elif not user_email or not user_name:
         st.warning("请填写你的名字和接收人的飞书邮箱！")
     else:
         is_30_eps = any("核心剧情事件" in f.name for f in uploaded_files)
         
+        # 提前找出并提取“创意”内容，精准注入文档头部
+        idea_content = ""
+        for f in uploaded_files:
+            base_name = f.name.replace('\\', '/').split('/')[-1]
+            if "idea" in base_name.lower() or "创意" in base_name:
+                raw_idea = f.getvalue().decode("utf-8").splitlines()
+                clean_idea_lines = []
+                for l in raw_idea:
+                    hm = re.match(r'^#+\s+(.*)', l.strip())
+                    if hm:
+                        # 创意内容中的小标题同样降维打击
+                        it = hm.group(1).strip().replace('**', '')
+                        clean_idea_lines.append(f"**{it}**")
+                    else:
+                        clean_idea_lines.append(l)
+                idea_content = "\n".join(clean_idea_lines).strip()
+                break
+                
         sorted_files = sorted(uploaded_files, key=lambda f: get_sort_weight(f.name))
-        merged_text = "# 1. 原创意\n\n## 1.1 创意内容\n\n## 1.2 来源\n\n---\n\n"
+        
+        # 将创意内容无缝嵌入第一节
+        merged_text = f"# 1. 原创意\n\n## 1.1 创意内容\n\n{idea_content}\n\n## 1.2 来源\n\n---\n\n"
         
         extracted_sanmu = ""
         extracted_xigang = ""
@@ -174,25 +200,33 @@ if st.button("**🚀 第三步：开始拼接并上传飞书**", use_container_w
 
         with st.spinner('正在进行数据清洗与双文档拼接...'):
             for file in sorted_files:
-                filename = file.name
+                base_name = file.name.replace('\\', '/').split('/')[-1]
+                
+                if base_name.lower() in ["summary.txt", "manifest.txt"] or base_name.startswith("."):
+                    continue
+                
+                if "idea" in base_name.lower() or "创意" in base_name:
+                    continue
+                
                 raw_lines = file.getvalue().decode("utf-8").splitlines()
                 
-                if "主题" in filename: merged_text += "# 2. 主题\n\n"
-                elif "主角小传" in filename: merged_text += "# 3. 主角小传\n\n"
-                elif "反派小传" in filename or "对手" in filename: merged_text += "# 4. 对手小传\n\n"
-                elif "配角小传" in filename: merged_text += "# 5. 配角小传\n\n"
-                elif "三幕大纲" in filename: merged_text += "# 6. 三幕表格大纲\n\n"
-                elif "核心剧情事件" in filename: merged_text += "# 6. 核心剧情事件\n\n"
-                elif "细纲" in filename: merged_text += "# 7. 单集细纲\n\n"
-                elif "shootingscript" in filename.lower():
+                if "主题" in base_name: merged_text += "# 2. 主题\n\n"
+                elif "主角小传" in base_name: merged_text += "# 3. 主角小传\n\n"
+                elif "反派小传" in base_name or "对手" in base_name: merged_text += "# 4. 对手小传\n\n"
+                elif "配角小传" in base_name: merged_text += "# 5. 配角小传\n\n"
+                elif "三幕大纲" in base_name: merged_text += "# 6. 三幕表格大纲\n\n"
+                elif "核心剧情事件" in base_name: merged_text += "# 6. 核心剧情事件\n\n"
+                elif "细纲" in base_name: merged_text += "# 7. 单集细纲\n\n"
+                elif "角色提示词" in base_name: merged_text += "# 8. 角色提示词\n\n"
+                elif re.search(r'EP\d+', base_name, re.IGNORECASE) or "shootingscript" in base_name.lower():
                     if not state_shooting_printed:
-                        merged_text += "# 8. Shooting script\n\n"
+                        merged_text += "# 9. Shooting script\n\n"
                         state_shooting_printed = True
-                    match = re.search(r'第(\d+)集', filename)
-                    ep_num = match.group(1) if match else "X"
+                    match = re.search(r'EP(\d+)|第(\d+)集', base_name, re.IGNORECASE)
+                    ep_num = (match.group(1) or match.group(2)) if match else "X"
                     merged_text += f"#### EP{ep_num}\n\n"
                 else:
-                    merged_text += f"# {filename}\n\n"
+                    merged_text += f"# {base_name}\n\n"
 
                 lines = []
                 skip_mode = False
@@ -209,35 +243,73 @@ if st.button("**🚀 第三步：开始拼接并上传飞书**", use_container_w
                     if any(clean_str.startswith(kw) for kw in skip_keywords):
                         skip_mode = True
                         continue
+                    
                     if re.match(r'^(?:\[.*?\]\s*)?第\d+集([：:]|\s*\[)\s*(将|在|字数|添加)', clean_str):
                         skip_mode = True
                         continue
                     if skip_mode and re.match(r'^第\d+集\s*\|', clean_str):
                         continue
-                    if re.match(r'^(《.*?》)?(三幕大纲|分集细纲|表格大纲|Shooting script).*?[\(（]修正版[\)）]', clean_str):
+                    if re.match(r'^(《.*?》)?(三幕大纲|分集细纲|表格大纲|Shooting script).*?[\(（]修正版[\)）]', clean_str, re.IGNORECASE):
                         skip_mode = True
                         continue
                         
                     is_resume = False
                     if any(clean_str.startswith(kw) for kw in resume_keywords): is_resume = True
                     if clean_str.startswith("集数 |") or clean_str.startswith("Episode |") or clean_str.startswith("编号/ID |"): is_resume = True
+                    
                     if re.match(r'^(?:\[.*?\]\s*)?第\d+集', clean_str) and not re.match(r'^(?:\[.*?\]\s*)?第\d+集([：:]|\s*\[)\s*(将|在|字数|添加)', clean_str): is_resume = True
+                    
                     if re.match(r'^1\.\s+[A-Za-z\u4e00-\u9fa5]', clean_str): is_resume = True
 
                     if is_resume: skip_mode = False
-                    if not skip_mode: lines.append(line)
+                    
+                    if skip_mode: 
+                        continue
+
+                    # 多余大标题直接剥离丢弃
+                    is_redundant_title = False
+                    if len(clean_str) < 50:
+                        redundant_patterns = [
+                            r'^\[?(反派|对手|主角|配角|核心|人物).*?(传记|小传|设定)', 
+                            r'^\[?(三幕|表格)?大纲\]?\s*$', 
+                            r'^\[?(分集|单集)?细纲\]?\s*$', 
+                            r'^\[?第\d+集\s*\[?Shooting\s*Script\]?', 
+                            r'^\[?Shooting\s*Script\]?\s*$',
+                            r'^\[?角色提示词\]?\s*$',
+                            r'^\[?Theme\s*\d*\]?\s*$',
+                            r'^\[?主题\]?\s*$'
+                        ]
+                        if any(re.match(pat, clean_str, re.IGNORECASE) for pat in redundant_patterns):
+                            is_redundant_title = True
+                            
+                    if not is_redundant_title:
+                        # 👇 标题降维机制：遇到自带的 Markdown 标题，直接转换为加粗文本
+                        heading_match = re.match(r'^#+\s+(.*)', raw_str)
+                        if heading_match:
+                            inner_text = heading_match.group(1).strip()
+                            # 唯独保留三幕大纲中的 Act 1 等层级，因为它极具结构性
+                            if "三幕大纲" in base_name and re.match(r'^Act\s*\d+', inner_text, re.IGNORECASE):
+                                line = f"#### {inner_text}"
+                            else:
+                                # 其他全部降维，剥离目录污染
+                                inner_text = inner_text.replace('**', '')
+                                line = f"**{inner_text}**"
+                        # 防止三幕大纲的 Act 没加 #
+                        elif "三幕大纲" in base_name and re.match(r'^Act\s*\d+', raw_str, re.IGNORECASE):
+                            line = f"#### {raw_str}"
+
+                        lines.append(line)
                 
                 cleaned_file_text = "\n".join(lines)
                 merged_text += cleaned_file_text + "\n\n---\n\n"
                 
-                if "三幕大纲" in filename:
-                    modified_sanmu = re.sub(r'^#*\s*(Act\s*\d+.*)', r'#### \1', cleaned_file_text, flags=re.IGNORECASE|re.MULTILINE)
-                    extracted_sanmu += modified_sanmu + "\n\n"
-                elif "细纲" in filename:
+                if "三幕大纲" in base_name:
+                    extracted_sanmu += cleaned_file_text + "\n\n"
+                elif "细纲" in base_name:
                     extracted_xigang += cleaned_file_text + "\n\n"
-                elif "shootingscript" in filename.lower():
-                    match = re.search(r'第(\d+)集', filename)
-                    ep_num = match.group(1) if match else "X"
+                elif re.search(r'EP\d+', base_name, re.IGNORECASE) or "shootingscript" in base_name.lower():
+                    match = re.search(r'EP(\d+)|第(\d+)集', base_name, re.IGNORECASE)
+                    ep_num = (match.group(1) or match.group(2)) if match else "X"
                     extracted_shooting += f"#### EP{ep_num}\n\n{cleaned_file_text}\n\n"
         
         doc2_title = f"TT<> 规模化合作沟通文档_{script_name}"
